@@ -1,0 +1,196 @@
+---
+title: 'Ch 2: The Garden of Forking Data'
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+library(cowplot)
+library(kableExtra)
+library(knitr)
+library(tidyverse)
+```
+
+## A Bag of Marbles
+
+What's the intuition underlying Bayesian inference? Using the marble example, let $p$ be the proportion of blue marbles in the bag and $D_{new}$ be the series of draws (e.g. blue-white-blue). If there are four marbles in the bag, $p$ can be one of five values: 0, 0.25, 0.5, 0.75, 1. The plausibility of each value is:
+
+$$
+\textrm{plausibility of } p \textrm{ after } D_{new} = \frac{\textrm{ways } p \textrm{ can produce } D_{new} \times \textrm{ prior plausibility } p}{\textrm{sum of products}}
+$$
+
+```{r 2.1, echo=TRUE}
+# proportion of blue marbles in a bag of four marbles
+nmarble <- 4
+p <- 0:nmarble / nmarble
+# draw blue-white-blue
+Dnew = c(1, 0, 1)
+# ways and plausibilities
+ways <- map_dbl(p, ~ prod(ifelse(Dnew == 1, .x, 1 - .x) * nmarble))
+plausibilities <- ways / sum(ways)
+kable(data.frame(p, ways, plausibilities)) %>%
+  kable_styling(full_width = FALSE)
+```
+
+### Useful vocabulary
+
+Using the previous example,
+
+* $p$ is a **parameter**, a way of indexing possible explanations of the data
+* The relative number of *ways* $p$ could produce the data is the **likelihood**
+* The prior plausibility of a given $p$ is the **prior probability**
+* The new, updated plausibility of a given $p$ is the **posterior probability**
+
+## Water and Land
+
+The **likelihood** function specifices the plausibility of the data. For the globe tossing model, that's the likelihood of the world being covered by a $p$ proportion of water given a sequence of $w$ water points out of $n$ tries, i.e. the *binomial distribution*.
+
+$$
+Pr(w|n,p)=\frac{n!}{w!(n-w)!}p^w(1-p)^{n-w}
+$$
+
+This formula is built into R as the *density* of the binomial `dbinom()`. The plausibility of the sequence WLWWWLWLW (6 W's in 9 tries) if the world is 50% water is:
+
+```{r 2.2}
+dbinom(6, size = 9, prob = 0.5)
+```
+
+The **parameters** of the globe model are $p$ (probability of water), $n$ (sample size), and $w$ (number of W's). $n$ and $w$ are data - observed values without error. $p$ is unknown and we can use Bayesian inference to describe what the data suggest about it.
+
+When $n=0$, every $p$ between 0 and 1 was equally plausible (Fig. 2.5). This implied a certain **prior**, the uniform distribution. 
+
+By $n=9$, the data suggest $p$ is 2/3 with a narrow peak. This resulting estimate is the **posterior distribution**.
+
+**Bayes' theorem** is used under many types of inference, but Bayesian inference uses it more generally.
+
+$$
+Pr(p|w)=\frac{Pr(w|p)Pr(p)}{Pr(w)}
+$$
+
+What's $Pr(w)$? It's the *average likelihood*, which is the likelihood of the data averaged over the prior.
+
+$$
+Pr(w)=E(Pr(w|p))=\int{Pr(w|p)Pr(p)dp}
+$$
+
+## Estimating the posterior
+
+Numerical estimation becomes necessary for models of any real complexity.
+
+1. Grid approximation
+2. Quadratic approximation
+3. Markov chain Monte Carlo (MCMC)
+
+### Grid approximation
+
+1. Define the grid
+2. Compute the prior across the grid
+3. Compute the likelihood across the grid
+4. Multiply unstandardized prior by likelihood to get the posterior
+5. Standardize posterior by dividing by the sum
+
+Using a *uniform* prior ...
+```{r 2.3}
+# grid
+p_grid <- seq(0, 1, length.out = 20)
+
+# prior
+prior <- rep(1, length(p_grid))
+
+# likelihood
+lik <- dbinom(6, size = 9, prob = p_grid)
+
+# posterior
+posterior_unstd <- lik * prior
+posterior <- posterior_unstd / sum(posterior_unstd)
+```
+
+... we get the same result as figure 2.5.
+
+```{r 2.4}
+tibble(p_grid, posterior) %>% 
+  ggplot(aes(p_grid, posterior)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "probability of water",
+       y = "posterior probability") +
+  theme_classic()
+```
+
+But different priors lead to different results.
+
+```{r 2.5}
+calc_post <- function(prior) {
+  lik * prior / sum(lik * prior)
+}
+plot_prior <- function(prior) {
+  tibble(p_grid, prior) %>% 
+    ggplot(aes(p_grid, prior))  +
+    geom_line() +
+    geom_point() +
+    labs(x = "probability of water",
+         y = "prior probability") +
+    theme_classic()
+}
+plot_post <- function(post) {
+  tibble(p_grid, post) %>% 
+    ggplot(aes(p_grid, post)) +
+    geom_line() +
+    geom_point() +
+    labs(x = "probability of water",
+         y = "posterior probability") +
+    theme_classic()
+}
+plot_both <- function(prior, post) {
+  plot_grid(plot_prior(prior), plot_post(post), nrow = 1)
+}
+
+# A step prior
+prior_step <- ifelse(p_grid < 0.5, 0, 1)
+post_step <- calc_post(prior_step)
+plot_both(prior_step, post_step)
+
+# A pointy prior
+prior_pointy <- exp(-5 * abs(p_grid - 0.5))
+post_pointy <- calc_post(prior_pointy)
+plot_both(prior_pointy, post_pointy)
+```
+
+### Quadratic approximation
+
+Often the peak of the posterior will be close to normal, so the most important part of the posterior can be approximated as a Gaussian. The log of a Gaussian is a parabola, which is quadratic. Hence, quadratic approximation.
+
+1. Find the posterior mode (**maximum a posteriori**) via optimization
+2. Estimate the curvature near the mode
+
+```{r 2.6}
+library(rethinking)
+globe.qa <- map(
+  alist(
+    w ~ dbinom(9, p),  # binomial likelihood
+    p ~ dunif(0, 1)    # uniform prior
+  ),
+  data = list(w = 6)
+)
+
+# display summary of quadratic approximation
+precis(globe.qa)
+```
+
+The quadratic approximation arrived at a Gaussian with a mean of 0.67 and standard deviation of 0.16. How close is that to accurate? At $n=9$, it's better on the left side of the mode than the right. It gets better as $n$ increases (Fig. 2.8).
+
+```{r 2.7}
+# analytical calculation
+w <- 6
+n <- 9
+curve(dbeta(x, w + 1, n - w + 1), from = 0, to = 1)
+curve(dnorm(x, 0.67, 0.16), lty = 2, add = TRUE)
+```
+
+### Markov chain Monte Carlo (MCMC)
+
+>>> The conceptual challenge with MCMC lies in its highly non-obvious strategy. Instead of attempting to compute or approximate the posterior distribution directly, MCMC techniques mereley draw samples from the posterior. You end up with a collection of parameter values, and the frequencies of these values correspond to the posterior plausibilities. You can then build a picture of the posterior from the histogram of these samples.
