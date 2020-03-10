@@ -193,4 +193,183 @@ curve(dnorm(x, 0.67, 0.16), lty = 2, add = TRUE)
 
 ### Markov chain Monte Carlo (MCMC)
 
->>> The conceptual challenge with MCMC lies in its highly non-obvious strategy. Instead of attempting to compute or approximate the posterior distribution directly, MCMC techniques mereley draw samples from the posterior. You end up with a collection of parameter values, and the frequencies of these values correspond to the posterior plausibilities. You can then build a picture of the posterior from the histogram of these samples.
+> The conceptual challenge with MCMC lies in its highly non-obvious strategy. Instead of attempting to compute or approximate the posterior distribution directly, MCMC techniques mereley draw samples from the posterior. You end up with a collection of parameter values, and the frequencies of these values correspond to the posterior plausibilities. You can then build a picture of the posterior from the histogram of these samples.
+
+## Exercises
+
+### Easy
+
+2e1 2
+
+2e2 3
+
+2e3 1, 4
+
+### Medium
+
+2m1 
+```{r 2m1}
+p_grid <- seq(0, 1, length.out = 100)
+prior_unif <- rep(1, length(p_grid))
+calc_likelihood <- function(w, n, p_grid) {
+  dbinom(w, size = n, prob = p_grid)
+}
+calc_posterior <- function(prior, w, n, p_grid) {
+  prior * calc_likelihood(w, n, p_grid)
+}
+plot_posterior <- function(p_grid, posterior) {
+  tibble(p_grid, posterior) %>% 
+    ggplot(aes(p_grid, posterior)) +
+    geom_line() +
+    geom_point() +
+    labs(x = "probability of water",
+         y = "posterior probability") +
+    theme_classic()
+}
+
+post1 <- calc_posterior(prior_unif, 3, 3, p_grid)
+plot_posterior(p_grid, post1)
+
+post2 <- calc_posterior(prior_unif, 3, 4, p_grid)
+plot_posterior(p_grid, post2)
+
+post3 <- calc_posterior(prior_unif, 5, 7, p_grid)
+plot_posterior(p_grid, post3)
+```
+
+2m2
+```{r 2m2}
+prior_step <- ifelse(p_grid < 0.5, 0, 1)
+post1 <- calc_posterior(prior_step, 3, 3, p_grid)
+plot_posterior(p_grid, post1)
+
+post2 <- calc_posterior(prior_step, 3, 4, p_grid)
+plot_posterior(p_grid, post2)
+
+post3 <- calc_posterior(prior_step, 5, 7, p_grid)
+plot_posterior(p_grid, post3)
+```
+
+2m3
+
+Possible explanations = Earth or Mars
+
+Likelihood: $Pr(L|E) = 0.3$, $Pr(L|M) = 1.0$
+
+Prior plausibility is uniform
+
+$$
+Pr(L) = \int{Pr(L|p) Pr(p) dp} \\
+Pr(L) = Pr(L|E) Pr(E) + Pr(L|M) Pr(M) \\
+Pr(L) = 0.3 \times 0.5 + 1.0 \times 0.5 \\
+Pr(L) = 0.65
+$$
+
+$$
+Pr(E|L) = \frac{Pr(L|E) Pr(E)}{Pr(L)} \\
+Pr(E|L) = \frac{0.3 \times 0.5}{0.65} \\
+Pr(E|L) = 0.23
+$$
+
+2m4 
+
+p   | ways | plausibility
+--- | ---- | ------------
+ww  | 0    | 0
+bw  | 1    | 1/3 
+bb  | 2    | 2/3
+
+2m5
+
+p   | ways | plausibility
+--- | ---- | ------------
+ww  | 0    | 0
+bw  | 1    | 1/5 
+bb  | 4    | 4/5
+
+2m6
+
+p   | ways | prior | plausibility
+--- | ---- | ----- | ------------
+ww  | 0    | 3     | 0
+bw  | 1    | 2     | 2/4
+bb  | 2    | 1     | 2/4
+
+2m7
+
+p   | ways | plausibility
+--- | ---- | ------------
+ww  | 0    | 0
+bw  | 2    | 2/8 
+bb  | 6    | 6/8
+
+### Hard
+
+2h1
+
+$$
+Pr(A) = 0.5, Pr(B) = 0.5, Pr(t|A) = 0.1, Pr(t|B) = 0.2 \\
+Pr(t|t) = Pr(t|A) Pr(A|t) + Pr(t|B) Pr(B|t) \\
+Pr(A|t) = \frac{Pr(t|A) Pr(A)}{Pr(t)} \\
+Pr(t) = \int{Pr(t|p) Pr(p) dp} \\
+Pr(t) = Pr(t|A) Pr(A) + Pr(t|B) Pr(B) \\
+Pr(t) = 0.1 \times 0.5 + 0.2 \times 0.5 \\
+Pr(t) = 0.15 \\
+Pr(A|t) = \frac{0.1 \times 0.5}{0.15} \\
+Pr(A|t) = 1/3 \\
+Pr(B|t) = 2/3 \\
+Pr(t|t) = 0.1 \times 1/3 + 0.2 \times 2/3 \\ 
+Pr(t|t) = 0.17
+$$
+
+2h2
+
+$$
+Pr(A|t) = \frac{Pr(t|A) Pr(A)}{Pr(t)} \\
+Pr(t) = \int{Pr(t|p) Pr(p) dp} \\
+Pr(t) = Pr(t|A) Pr(A) + Pr(t|B) Pr(B) \\
+Pr(t) = 0.1 \times 0.5 + 0.2 \times 0.5 \\
+Pr(t) = 0.15 \\
+Pr(A|t) = \frac{0.1 \times 0.5}{0.15} \\
+Pr(A|t) = 1/3
+$$
+
+2h3
+
+$$
+Pr(A|ts) = \frac{Pr(ts|A) Pr(A)}{Pr(ts)} \\
+Pr(ts) = \int{Pr(ts|p) Pr(p) dp} \\
+Pr(ts) = Pr(ts|A) Pr(A) + Pr(ts|B) Pr(B) \\
+Pr(ts) = 0.1 \times 0.9 \times 0.5 + 0.2 \times 0.8 \times 0.5 \\
+Pr(ts) = 0.125 \\
+Pr(A|ts) = \frac{0.1 \times 0.9 \times 0.5}{0.125} \\
+Pr(A|ts) = 0.36
+$$
+
+2h4
+
+Just genetic test:
+
+$$
+Pr(A_+|A) = 0.8, Pr(B_+|B) = 0.65 \\
+Pr(A|A_+) = \frac{Pr(A_+|A) Pr(A)}{Pr(A_+)} \\
+Pr(A_+) = \int{Pr(A_+|p) Pr(p) dp} \\
+Pr(A_+) = Pr(A_+|A) Pr(A) + Pr(A_+|B) Pr(B) \\
+Pr(A_+) = 0.8 \times 0.5 + 0.35 \times 0.5 \\
+Pr(A_+) = 0.575 \\
+Pr(A|A_+) = \frac{0.8 \times 0.5}{0.575} \\
+Pr(A|A_+) = 0.70
+$$
+
+Genetic test *and* births:
+
+$$
+\textrm{From genetic test: } Pr(A) = 0.7, Pr(B) = 0.3 \\
+Pr(A|t) = \frac{Pr(t|A) Pr(A)}{Pr(t)} \\
+Pr(t) = \int{Pr(t|p) Pr(p) dp} \\
+Pr(t) = Pr(t|A) Pr(A) + Pr(t|B) Pr(B) \\
+Pr(t) = 0.1 \times 0.7 + 0.2 \times 0.3 \\
+Pr(t) = 0.13 \\
+Pr(A|t) = \frac{0.1 \times 0.7}{0.13} \\
+Pr(A|t) = 0.54
+$$

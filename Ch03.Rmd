@@ -1,0 +1,321 @@
+---
+title: 'Ch 3: Sampling the Imaginary'
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+library(cowplot)
+library(kableExtra)
+library(knitr)
+library(tidyverse)
+```
+
+What's the probability of someone being a vampire?
+
+```{r 3.1}
+PrPV <- 0.95
+PrPM <- 0.01
+PrV <- 0.001
+
+PrP <- PrPV * PrV + PrPM * (1 - PrV)
+PrVP <- PrPV * PrV / PrP
+PrVP
+```
+
+## Sampling from a grid-approximate posterior
+
+Generate 1,000 values for the posterior distribution (back to the globe example from Ch 2)
+
+```{r 3.2}
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- rep(1, length(p_grid))
+likelihood <- dbinom(6, size = 9, prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+```
+
+Draw 10,000 samples from the posterior
+
+```{r 3.3}
+samples <- sample(p_grid, prob = posterior, size = 1e4, replace= TRUE)
+```
+
+Plot the samples and their density
+
+```{r 3.4}
+sample_tbl <- tibble(i = seq_along(samples), sample = samples)
+plot_grid(
+  ggplot(sample_tbl, aes(i, sample)) +
+    geom_point(color = "blue", fill = "light blue", alpha = 0.5, shape = 21) +
+    expand_limits(y = c(0, 1)) +
+    theme_classic(),
+  ggplot(sample_tbl, aes(sample)) +
+    geom_density() +
+    expand_limits(x = c(0, 1)) +
+    theme_classic()
+)
+```
+
+## Sampling to summarize
+
+### Intervals of defined boundaries
+
+Posterior probability the proportion of water is less than 0.5?
+
+```{r 3.6}
+# add up the posterior probability where p < 0.5
+sum(posterior[p_grid < 0.5])
+```
+
+Now with the samples
+
+```{r 3.7}
+# below 0.5?
+sum(samples < 0.5) / length(samples)
+# between 0.5 and 0.75?
+sum(samples > 0.5 & samples < 0.75) / length(samples)
+```
+
+### Intervals of defined mass
+
+Where's the 80th percentile?
+
+```{r 3.9}
+quantile(samples, 0.8)
+```
+
+What's the middle 80%?
+
+```{r 3.10}
+quantile(samples, c(0.1, 0.9))
+```
+
+How about with a skewed distribution? The 50% **percentile interval** no longer contains the mode of the distribution and is therefore misleading.
+
+```{r 3.11}
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- rep(1, length(p_grid))
+likelihood <- dbinom(3, size = 3, prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+samples <- sample(p_grid, size = 1e4, replace = TRUE, prob = posterior)
+PI(samples, prob = 0.5)
+```
+
+Conversely, the **highest posterior density interval** is the narrowest interval containing the specified probability mass.
+
+```{r 3.13}
+HPDI(samples, prob = 0.5)
+```
+
+### Point estimates
+
+**The entire posterior distribution is the Bayesian parameter estimate**, but if you have to report one number what should you choose?
+
+Mode, mean, median?
+
+```{r 3.14}
+# maximum a posteriori estimate
+p_grid[which.max(posterior)]
+
+# mode of the samples
+dsamples <- density(samples, adj = 0.01)
+dsamples$x[which.max(dsamples$y)]
+
+# other central tendencies
+mean(samples)
+median(samples)
+```
+
+## Sampling to simulate prediction
+
+Generate samples from a binomial and check their densities.
+
+```{r 3.23}
+dummy_w <- rbinom(1e5, size = 2, prob = 0.7)
+table(dummy_w) / length(dummy_w)
+
+dbinom(0:2, size = 2, prob = 0.7)
+```
+
+**Posterior predictive distribution** - what does a parameter predict? It's not the same as the posterior distribution itself, because each $p$ generates a different distribution of predictions. But we can average those prediction distributions of the posterior distribution.
+
+```{r 3.25}
+# This is the prediction distribution for a given p
+w <- rbinom(1e4, size = 9, prob = 0.6)
+simplehist(w)
+
+# This is the prediction distribution averaged over all p's
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- rep(1, length(p_grid))
+likelihood <- dbinom(6, size = 9, prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+samples <- sample(p_grid, prob = posterior, size = 1e4, replace = TRUE)
+w <- rbinom(1e4, size = 9, prob = samples)
+simplehist(w)
+```
+
+## Exercises
+
+### Easy
+
+```{r 3.27}
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- rep(1, length(p_grid))
+likelihood <- dbinom(6, size = 9, prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+set.seed(100)
+samples <- sample(p_grid, prob = posterior, size = 1e4, replace = TRUE)
+```
+
+3e1
+
+```{r 3e1}
+sum(samples < 0.2) / length(samples)
+```
+
+3e2
+
+```{r 3e2}
+sum(samples > 0.8) / length(samples)
+```
+
+3e3
+
+```{r 3e3}
+sum(samples > 0.2 & samples < 0.8) / length(samples)
+```
+
+3e4
+
+```{r 3e4}
+quantile(samples, 0.2)
+```
+
+3e5
+
+```{r 3e5}
+quantile(samples, 0.8)
+```
+
+3e6
+
+```{r 3e6}
+HPDI(samples, prob = 0.66)
+```
+
+3e7
+
+```{r 3e7}
+quantile(samples, c((1 - 0.66) / 2, 1 - (1 - 0.66) / 2))
+```
+
+### Medium
+
+3m1 
+
+```{r 3m1}
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- rep(1, length(p_grid))
+likelihood <- dbinom(8, size = 15, prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+```
+
+3m2
+
+```{r 3m2}
+samples <- sample(p_grid, 1e4, prob = posterior, replace = TRUE)
+HPDI(samples, prob = 0.9)
+```
+
+3m3
+
+```{r 3m3}
+w <- rbinom(1e4, size = 15, prob = samples) 
+simplehist(w)
+table(w) / length(w)
+```
+
+Probability of 8 water in 15 tosses is 14.1%.
+
+3m4
+
+Probability of 6 water in 15 tosses is 11.7%
+
+3m5
+
+```{r 3m5}
+# with step prior
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- ifelse(p_grid < 0.5, 0, 1)
+likelihood <- dbinom(8, size = 15, prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+
+# repeat earlier problems
+HPDI(samples, prob = 0.9)
+samples <- sample(p_grid, 1e4, prob = posterior, replace = TRUE)
+w <- rbinom(1e4, size = 15, prob = samples) 
+table(w) / length(w)
+
+# compare to p = 0.7 (true value)
+dbinom(c(6, 8), 15, 0.7 )
+```
+
+90% HPDI shifted from (0.33, 0.72) to (0.50, 0.711). Probability of 8 in 15 shifted from 14.1% to 16.1% (compared to 8.11% at p = 0.7) and 6 in 15 from 11.7% to 6.91% (compared to 1.16% at p = 0.7).
+
+### Hard
+
+```{r 3.29}
+data(homeworkch3)
+# birth1 and birth2
+```
+
+3h1
+
+```{r 3h1}
+p_grid <- seq(0, 1, length.out = 1e3)
+prior <- rep(1, length(p_grid))
+likelihood <- dbinom(sum(c(birth1, birth2)), 
+                     size = length(c(birth1, birth2)), 
+                     prob = p_grid)
+posterior <- (likelihood * prior) %>% {. / sum(.)}
+p_grid[[which.max(posterior)]]
+```
+
+3h2 
+
+```{r 3h2}
+samples <- sample(p_grid, 1e4, replace = TRUE, prob = posterior)
+HPDI(samples, prob = c(0.5, 0.89, 0.97))
+```
+
+3h3
+
+```{r 3h3}
+simbirth <- rbinom(1e4, size = 200, prob = samples)
+dens(simbirth)
+abline(v = sum(birth1, birth2))
+```
+
+3h4
+
+```{r 3h4}
+simbirth <- rbinom(1e4, size = 100, prob = samples)
+dens(simbirth, adj = 0.6)
+abline(v = sum(birth1))
+```
+
+Model less accurate on first births
+
+3h5
+
+```{r 3h5}
+simbirth <- rbinom(1e4, size = sum(!birth1), prob = samples)
+dens(simbirth, adj = 1)
+abline(v = sum(birth2[!birth1]))
+```
+
+The second child is more likely to be a boy following the birth of a girl.
