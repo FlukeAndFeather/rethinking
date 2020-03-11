@@ -1,0 +1,589 @@
+---
+title: 'Ch 4: Linear Models'
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Why normal distributions are normal
+
+### Normal by addition
+
+```{r 4.1}
+pos <- replicate(1000, sum(runif(16, -1, 1)))
+hist(pos)
+plot(density(pos))
+
+# Sum of lognormal instead of uniform
+pos <- replicate(1e3, sum(rlnorm(1e5)))
+hist(pos)
+dens(pos, norm.comp = TRUE)
+```
+
+### Normal by multiplication
+
+```{r 4.2}
+prod(1 + runif(12, 0, 0.1))
+growth <- replicate(1e4, prod(1 + runif(12, 0, 0.1)))
+dens(growth, norm.comp = TRUE)
+```
+
+```{r 4.4}
+big <- replicate(1e4, prod(1 + runif(12, 0, 0.5)))
+small <- replicate(1e4, prod(1 + runif(12, 0, 0.01)))
+dens(big, norm.comp = TRUE)
+dens(small, norm.comp = TRUE)
+```
+
+### Normal by log-multiplication
+
+```{r 4.5}
+log.big <- replicate(1e4, log(prod(1 + runif(12, 0, 0.5))))
+dens(log.big, norm.comp = TRUE)
+```
+
+> One consequence of this is that statistical models based on Gaussian distributions connot reliably identify micro-process. This recalls the modeling philosophy from Chapter 1 (page 6). But it also means that these models can do useful work, even when they cannot identify process. If we had to know the development biology of height before we could build a statistical model of height, human biology would be sunk.
+
+## A language for describing models
+
+1. Outcome
+2. Likelihood
+3. Predictors
+4. Relate predictors to outcomes
+5. Priors
+
+### Grid approximation
+
+```{r 4.7}
+library(rethinking)
+library(tidyverse)
+data(Howell1)
+str(Howell1)
+head(Howell1$height)
+adults <- filter(Howell1, age >= 18)
+nrow(adults)
+dens(adults$height)
+```
+
+Define the heights as normally distributed with a mean $\mu$ and standard deviation $\sigma$. Provide priors for each parameter.
+
+$$
+h_i \sim \mathcal{N}(\mu, \sigma) \\
+\mu \sim \mathcal{N}(178, 20) \\
+\sigma \sim \mathcal{U}(0, 50)
+$$
+
+```{r 4.11}
+# prior distributions
+curve(dnorm(x, 178, 20), from = 100, to = 250)
+curve(dunif(x, 0, 50), from = -10, to = 60)
+
+# sampling the prior
+sample_mu <- rnorm(1e4, 178, 20)
+sample_sigma <- runif(1e4, 0, 50)
+prior_h <- rnorm(1e4, sample_mu, sample_sigma)
+dens(prior_h)
+```
+
+Using grid approximation to estimate the posterior distribution. Everything is on the log scale to avoid round-to-zero errors. Hence, sums instead of products. Also, rescaling to the maximum before exponentiating (`prob = exp(prod - max(prod))`) to again avoid round-to-zero errors.
+
+```{r 4.14}
+post <- expand_grid(
+  mu = seq(140, 160, length.out = 200),
+  sigma = seq(4, 9, length.out = 200)
+) %>% 
+  mutate(LL = map2_dbl(mu, sigma, ~ sum(dnorm(adults$height, 
+                                              mean = .x, 
+                                              sd = .y, 
+                                              log = TRUE))),
+         prod = LL + dnorm(mu, 178, 20, TRUE) + dunif(sigma, 0, 50, TRUE),
+         prob = exp(prod - max(prod)))
+contour_xyz(post$mu, post$sigma, post$prob)
+image_xyz(post$mu, post$sigma, post$prob)
+```
+
+```{r 4.17}
+sample.rows <- sample(1:nrow(post), 
+                      size = 1e4, 
+                      replace = TRUE, 
+                      prob = post$prob)
+sample.mu <- post$mu[sample.rows]
+sample.sigma <- post$sigma[sample.rows]
+
+samples <- tibble(
+  mu = sample.mu,
+  sigma = sample.sigma
+)
+ggplot(samples, aes(mu, sigma)) +
+  geom_point(color = "blue", alpha = 0.15) +
+  theme_classic()
+
+dens(samples$mu, adj = 0.9)
+dens(samples$sigma)
+
+HPDI(samples$mu)
+HPDI(samples$sigma)
+```
+
+### Fitting with `map`
+
+```{r 4.25}
+# function list, in this case the model specification
+flist <- alist(
+  height ~ dnorm(mu, sigma),
+  mu ~ dnorm(178, 20),
+  sigma ~ dunif(0, 50)
+)
+m4.1 <- rethinking::map(flist, data = adults)
+precis(m4.1)
+```
+
+Now with a narrow prior
+```{r 4.29}
+m4.2 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu ~ dnorm(178, 0.1),
+    sigma ~ dunif(0, 50)
+  ), 
+  data = adults
+)
+precis(m4.2)
+```
+
+### Ruh roh, vcov
+
+```{r 4.30}
+# variance-covariance
+vcov(m4.1)
+# decompose into vector of variances and correlation matrix
+diag(vcov(m4.1))
+cov2cor(vcov(m4.1))
+```
+
+Draw samples from a quadratic approximation
+
+```{r 4.32}
+post <- extract.samples(m4.1, n = 1e4)
+head(post)
+precis(post)
+plot(post)
+```
+
+## Adding a predictor
+
+```{r 4.37}
+plot(height ~ weight, data = adults)
+```
+
+Specifying the model with a predictor
+
+$$
+h_i \sim \mathcal{N}(\mu_i, \sigma) \\
+\mu_i = \alpha + \beta x_i \\
+\alpha \sim \mathcal{N}(178, 100) \\
+\beta \sim \mathcal{N}(0, 10) \\
+\sigma \sim \mathcal{U}(0, 50)
+$$
+
+Fit the model
+
+```{r 4.38}
+m4.3 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b * weight,
+    a ~ dnorm(156, 100),
+    b ~ dnorm(0, 10),
+    sigma ~ dunif(0, 50)
+  ), 
+  data = adults
+)
+precis(m4.3)
+cov2cor(vcov(m4.3))
+```
+
+$\alpha$ and $\beta$ are super correlated. Let's disentangle.
+
+```{r 4.42}
+adults2 <- mutate(adults, weight.c = weight - mean(weight))
+m4.4 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b * weight.c,
+    a ~ dnorm(156, 100),
+    b ~ dnorm(0, 10),
+    sigma ~ dunif(0, 50)
+  ), 
+  data = adults2
+)
+precis(m4.4)
+cov2cor(vcov(m4.4))
+```
+
+Plot posterior with uncertainty
+
+```{r 4.45}
+post <- extract.samples(m4.3)
+ggplot(adults2, aes(weight, height)) + 
+  geom_point() +
+  geom_abline(intercept = coef(m4.3)["a"], slope = coef(m4.3)["b"]) +
+  geom_abline(aes(intercept = a, slope = b), slice(post, 1:20), alpha = 0.2) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+Now with a regression interval
+
+```{r 4.53}
+hpdi_int <- function(x, post, prob) {
+  # use posterior a and b to calculate the distribution around the input
+  result <- sapply(x, function(.x) post$a + post$b * .x) %>% 
+    # summarize the distribution by the highest posterior density interval
+    apply(2, HPDI, prob = prob) %>% 
+    # rearrange as a data frame
+    t() %>% 
+    as.data.frame()
+  colnames(result) <- c("low", "high")
+  result$x = x
+  result[, c("x", "low", "high")]
+}
+# best estimate line
+best_line <- tibble(
+  weight = c(30, 65),
+  height = coef(m4.3)["a"] + coef(m4.3)["b"] * weight
+)
+# raw data with best estimate and 99% HPDI
+ggplot(adults2, aes(weight, height)) + 
+  geom_point(shape = 21, alpha = 0.8) +
+  geom_ribbon(aes(x, ymin = low, ymax = high), 
+              hpdi_int(seq(30, 65, length.out = 1e2), post, 0.99),
+              alpha = 0.5,
+              inherit.aes = FALSE) +
+  geom_line(data = best_line) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+The previous plot is the 99% interval of **$\mu$**. Incorporate $\sigma$ to get the prediction interval.
+
+```{r 4.59}
+# Simulate heights, not just the mean
+sim.height <- sim(m4.3, 
+                  data = list(weight = seq(30, 65, length.out = 100)),
+                  n = 1e4)
+str(sim.height)
+height.PI <- apply(sim.height, 2, PI, prob = 0.89) %>% 
+  t() %>% 
+  as.data.frame()
+colnames(height.PI) <- c("low", "high")
+height.PI$weight <- seq(30, 65, length.out = 100)
+
+ggplot(adults2, aes(weight, height)) + 
+  geom_point(shape = 21, alpha = 0.8) +
+  geom_ribbon(aes(x = weight, ymin = low, ymax = high), 
+              height.PI,
+              inherit.aes = FALSE,
+              alpha = 0.2) +
+  geom_ribbon(aes(x, ymin = low, ymax = high), 
+              hpdi_int(seq(30, 65, length.out = 1e2), post, 0.89),
+              alpha = 0.6,
+              inherit.aes = FALSE) +
+  geom_line(data = best_line) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+This figure has the raw data, the 89% plausible $\mu$, and the 89% predicted data.
+
+## Polynomial regression 
+
+Fit the polynomial model:
+
+$$
+h_i \sim \mathcal{N}(\mu_i, \sigma) \\
+\mu_i = \alpha + \beta_1 x_i + \beta_2 x_i^2\\
+\alpha \sim \mathcal{N}(178, 100) \\
+\beta_1 \sim \mathcal{N}(0, 10) \\
+\beta_2 \sim \mathcal{N}(0, 10) \\
+\sigma \sim \mathcal{U}(0, 50)
+$$
+
+```{r 4.66}
+d <- Howell1 %>% 
+  mutate(std_weight = (weight - mean(weight)) / sd(weight),
+         std_weight2 = std_weight^2)
+
+m4.5 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1 * std_weight + b2 * std_weight2,
+    a ~ dnorm(178, 100),
+    b1 ~ dnorm(0, 10),
+    b2 ~ dnorm(0, 10),
+    sigma ~ dunif(0, 50)
+  ), 
+  data = d
+)
+precis(m4.5)
+```
+
+Plot the results
+
+```{r 4.68}
+# summarize model
+seq_weight <- seq(-2.2, 2, length.out = 30)
+pred_dat <- list(std_weight = seq_weight, std_weight2 = seq_weight^2)
+mu <- link(m4.5, data = pred_dat)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI, prob = 0.89)
+sim.height <- sim(m4.5, data = pred_dat)
+height.PI <- apply(sim.height, 2, PI, prob = 0.89)
+
+# plot fit
+pred_tbl <- tibble(
+  std_weight = seq_weight, 
+  mu_mean = mu.mean,
+  mu_low = mu.PI[1, ],
+  mu_high = mu.PI[2, ],
+  height_low = height.PI[1, ],
+  height_high = height.PI[2, ]
+) %>% 
+  mutate(weight = std_weight * sd(d$weight) + mean(d$weight))
+
+ggplot(d, aes(weight, height)) + 
+  geom_point(shape = 21, alpha = 0.5) +
+  geom_line(aes(y = mu_mean), pred_tbl) +
+  geom_ribbon(aes(weight, ymin = mu_low, ymax = mu_high),
+              pred_tbl,
+              inherit.aes = FALSE,
+              alpha = 0.6) +
+  geom_ribbon(aes(weight, ymin = height_low, ymax = height_high),
+              pred_tbl,
+              inherit.aes = FALSE,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+## Exercises
+
+### Easy
+
+4e1 line 1 is the likelihood
+
+4e2 2 parameters
+
+4e3
+
+$$
+p(\mu, \sigma | y) = \frac{\prod_i \mathcal{N}(h_i | \mu, \sigma) \mathcal{N}(\mu | 0, 10) \mathcal{U}(\sigma | 0, 10)}{\int \int \prod_i \mathcal{N}(h_i | \mu, \sigma) \mathcal{N}(\mu | 0, 10) \mathcal{U}(\sigma | 0, 10) d\mu d\sigma}
+$$
+
+4e4 line 2 is the linear model
+
+4e5 3 parameters
+
+### Medium
+
+4m1
+
+```{r 4m1}
+sim_heights <- rnorm(1e4, rnorm(1e4, 0, 10), runif(1e4, 0, 10))
+plot(density(sim_heights))
+curve(dnorm(x, mean = mean(sim_heights), sd = sd(sim_heights)), 
+      col = "blue", lty = 3, add = TRUE)
+```
+
+4m2
+
+```{r 4m2}
+m4m2_form <- alist(
+  y ~ dnorm(mu, sigma),
+  mu ~ dnorm(0, 10),
+  sigma ~ dunif(0, 10)
+)
+```
+
+4m3
+
+$$
+y_i \sim \mathcal{N}(\mu_i, \sigma) \\
+\mu_i = \alpha + \beta x_i \\
+\alpha \sim \mathcal{N}(0, 50) \\
+\beta \sim \mathcal{U}(0, 10) \\
+\sigma \sim \mathcal{U}(0, 50)
+$$
+
+4m4
+
+```{r 4m4}
+m4m2_form <- alist(
+  height ~ dnorm(mu, sigma),
+  mu = a + b * year,
+  a ~ dnorm(100, 10),
+  b ~ dnorm(2, 1),
+  sigma ~ dunif(0, 20)
+)
+```
+
+4m5
+
+Set mean of `a` to 120. For `b`, use `log(b) ~ dnorm(...)`, which forces growth rate to be positive.
+
+4m6
+
+`sigma ~ dunif(0, sqrt(64))`. i.e. variance must be between 0 and 64.
+
+### Hard
+
+4h1
+
+```{r 4h1}
+weight <- c(46.95, 43.72, 64.78, 32.59, 54.63)
+std_weight <- (weight - mean(d$weight)) / sd(d$weight)
+sim_weight <- sim(m4.5, data = list(std_weight = std_weight, std_weight2 = std_weight^2))
+
+mean_height <- apply(sim_weight, 2, mean)
+pi_height <- apply(sim_weight, 2, PI)
+pi_height_fmt <- sprintf("%0.1f - %0.1f", pi_height[1, ], pi_height[2, ])
+tibble(
+  Individual = 1:5, 
+  weight = weight, 
+  `expected height` = mean_height,
+  `89% interval` = pi_height_fmt
+)
+```
+
+```{r 4h2a}
+kids <- filter(Howell1, age < 18) %>% 
+  mutate(std_weight = (weight - mean(weight)) / sd(weight))
+m4h2 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b * std_weight,
+    a ~ dnorm(mean(height), 10),
+    b ~ dnorm(0, 10),
+    sigma ~ dunif(0, 25)
+  ),
+  data = kids
+)
+
+post <- extract.samples(m4h2, n = 1e4)
+dens(post$a)
+dens(post$b)
+dens(post$sigma)
+
+pred_tbl <- tibble(
+  std_weight = seq(min(kids$std_weight), 
+                   max(kids$std_weight), 
+                   length.out = 100),
+  weight = std_weight * sd(kids$weight) + mean(kids$weight),
+  mu = coef(m4h2)["a"] + coef(m4h2)["b"] * std_weight
+)
+
+ggplot(kids, aes(weight, height)) +
+  geom_point(shape = 21) +
+  geom_line(aes(y = mu),
+            pred_tbl) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+mean(post$b) / sd(kids$weight)
+PI(post$b) / sd(kids$weight)
+```
+
+On average, an increase of 10 units in weight correlates with an increase of 27.1 (26.0 - 28.2) units o height.
+
+```{r 4h2b}
+# summarize model
+seq_weight <- seq(min(kids$std_weight), 
+                  max(kids$std_weight), 
+                  length.out = 50)
+pred_dat <- list(std_weight = seq_weight)
+mu <- link(m4h2, data = pred_dat)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI, prob = 0.89)
+sim.height <- sim(m4h2, data = pred_dat)
+height.PI <- apply(sim.height, 2, PI, prob = 0.89)
+
+# plot fit
+pred_tbl <- tibble(
+  std_weight = seq_weight, 
+  mu_mean = mu.mean,
+  mu_low = mu.PI[1, ],
+  mu_high = mu.PI[2, ],
+  height_low = height.PI[1, ],
+  height_high = height.PI[2, ]
+) %>% 
+  mutate(weight = std_weight * sd(kids$weight) + mean(kids$weight))
+
+ggplot(kids, aes(weight, height)) + 
+  geom_point(shape = 21, alpha = 0.5) +
+  geom_line(aes(y = mu_mean), pred_tbl) +
+  geom_ribbon(aes(weight, ymin = mu_low, ymax = mu_high),
+              pred_tbl,
+              inherit.aes = FALSE,
+              alpha = 0.6) +
+  geom_ribbon(aes(weight, ymin = height_low, ymax = height_high),
+              pred_tbl,
+              inherit.aes = FALSE,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+The model over-predicts height for low/high weights and under-predicts height for weights near the mean. A polynomial or asymptotic model would capture the curvature better.
+
+4h3
+
+```{r 4h3}
+m4h3 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b * log(weight),
+    a ~ dnorm(178, 100),
+    b ~ dnorm(0, 100),
+    sigma ~ dunif(0, 50)
+  ),
+  data = Howell1
+)
+
+# summarize model
+seq_weight <- seq(min(Howell1$weight), 
+                  max(Howell1$weight), 
+                  length.out = 50)
+pred_dat <- list(weight = seq_weight)
+mu <- link(m4h3, data = pred_dat)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI, prob = 0.97)
+sim.height <- sim(m4h3, data = pred_dat)
+height.PI <- apply(sim.height, 2, PI, prob = 0.97)
+
+# plot fit
+pred_tbl <- tibble(
+  weight = seq_weight, 
+  mu_mean = mu.mean,
+  mu_low = mu.PI[1, ],
+  mu_high = mu.PI[2, ],
+  height_low = height.PI[1, ],
+  height_high = height.PI[2, ]
+)
+
+ggplot(Howell1, aes(weight, height)) + 
+  geom_point(shape = 21, alpha = 0.5) +
+  geom_line(aes(y = mu_mean), pred_tbl) +
+  geom_ribbon(aes(weight, ymin = mu_low, ymax = mu_high),
+              pred_tbl,
+              inherit.aes = FALSE,
+              alpha = 0.6) +
+  geom_ribbon(aes(weight, ymin = height_low, ymax = height_high),
+              pred_tbl,
+              inherit.aes = FALSE,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
