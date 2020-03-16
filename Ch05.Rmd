@@ -1,0 +1,558 @@
+---
+title: 'Ch 5: Linear Models'
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Spurious association
+
+Correlation between marriage and divorce
+
+```{r 5.1}
+library(cowplot)
+library(rethinking)
+library(tidyverse)
+
+# data
+data(WaffleDivorce)
+z <- function(x) (x - mean(x)) / sd(x)
+d <- WaffleDivorce %>% 
+  mutate(MedianAgeMarriage.s = z(MedianAgeMarriage),
+         Marriage.s = z(Marriage))
+
+# model
+m5.1 <- rethinking::map(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- a + bA * MedianAgeMarriage.s,
+    a ~ dnorm(10, 10),
+    bA ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+# plot
+MAM.seq <- seq(-3, 3.5, length.out = 30)
+mu <- link(m5.1, data = data.frame(MedianAgeMarriage.s = MAM.seq))
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+pred_tbl <- tibble(
+  MedianAgeMarriage.s = MAM.seq,
+  Divorce = mu.mean,
+  Divorce_low = mu.PI[1, ],
+  Divorce_high = mu.PI[2, ]
+)
+
+ggplot(d, aes(MedianAgeMarriage.s, Divorce)) +
+  geom_point() +
+  geom_ribbon(aes(ymin = Divorce_low, ymax = Divorce_high),
+              pred_tbl,
+              alpha = 0.2) +
+  geom_line(data = pred_tbl) +
+  theme_classic() + 
+  theme(aspect.ratio = 1)
+```
+
+```{r 5.3}
+# model
+m5.2 <- rethinking::map(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- a + bR * Marriage.s,
+    a ~ dnorm(10, 10),
+    bR ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+# plot
+mar.seq <- seq(-2, 3, length.out = 30)
+mu <- link(m5.2, data = data.frame(Marriage.s = mar.seq))
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+pred_tbl <- tibble(
+  Marriage.s = mar.seq,
+  Divorce = mu.mean,
+  Divorce_low = mu.PI[1, ],
+  Divorce_high = mu.PI[2, ]
+)
+
+ggplot(d, aes(Marriage.s, Divorce)) +
+  geom_point() +
+  geom_ribbon(aes(ymin = Divorce_low, ymax = Divorce_high),
+              pred_tbl,
+              alpha = 0.2) +
+  geom_line(data = pred_tbl) +
+  theme_classic() + 
+  theme(aspect.ratio = 1)
+```
+
+Specifying a multivariate model
+$$
+D_i \sim \mathcal{N}(\mu_i, \sigma) \\
+\mu_i = \alpha + \beta_R R_i + \beta_A A_i \\
+\alpha \sim \mathcal{N}(10, 10) \\
+\beta_R \sim \mathcal{N}(0, 1) \\
+\beta_A \sim \mathcal{N}(0, 1) \\
+\sigma \sim \mathcal{U}(0, 10)
+$$
+
+```{r 5.4}
+m5.3 <- rethinking::map(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- a + bR * Marriage.s + bA * MedianAgeMarriage.s,
+    a ~ dnorm(10, 10),
+    bR ~ dnorm(0, 1),
+    bA ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+precis(m5.3)
+
+plot(precis(m5.3))
+```
+
+### Plotting multivariate posteriors
+
+#### Predictor residual plots
+
+First, the residual of one predictor w.r.t. the other
+
+```{r 5.6}
+m5.4 <- rethinking::map(
+  alist(
+    Marriage.s ~ dnorm(mu, sigma),
+    mu <- a + b * MedianAgeMarriage.s,
+    a ~ dnorm(0, 10),
+    b ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+# compute expected value at MAP, for each State
+mu <- coef(m5.4)['a'] + coef(m5.4)['b'] * d$MedianAgeMarriage.s
+# compute residuals
+m.resid <- d$Marriage.s - mu
+
+# plot residuals
+R_resid_tbl <- tibble(
+  id = rep(d$Location, 2),
+  MedianAgeMarriage.s = rep(d$MedianAgeMarriage.s, 2),
+  Marriage.s = c(mu, d$Marriage.s)
+)
+mu_tbl <- tibble(
+  MedianAgeMarriage.s = range(d$MedianAgeMarriage.s),
+  Marriage.s = coef(m5.4)['a'] + coef(m5.4)['b'] * MedianAgeMarriage.s
+)
+ggplot(d, aes(MedianAgeMarriage.s, Marriage.s)) +
+  geom_line(data = mu_tbl) +
+  geom_line(aes(group = id), R_resid_tbl) +
+  geom_point(color = "blue", shape = 21) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+#### Counterfactual plots
+
+```{r 5.9}
+# prepare counterfactual data
+A.avg <- mean(d$MedianAgeMarriage.s)
+R.seq <- seq(-3, 3, length.out = 30)
+pred.data <- tibble(
+  Marriage.s = R.seq,
+  MedianAgeMarriage.s = A.avg
+)
+
+# compute counterfactual mean divorce (mu)
+mu <- link(m5.3, data = pred.data)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+# simulate counterfactual divorce outcomes
+R.sim <- sim(m5.3, data = pred.data, n = 1e4)
+R.PI <- apply(R.sim, 2, PI)
+
+# display predictions, hiding raw data with type = "n"
+plot(Divorce ~ Marriage.s, data = d, type = "n")
+mtext("MedianAgeMarriage.s = 0")
+lines(R.seq, mu.mean)
+shade(mu.PI, R.seq)
+shade(R.PI, R.seq)
+```
+
+#### Posterior prediction plots
+
+```{r 5.11}
+#call link without specifying new data so it uses original data
+mu <- link(m5.3)
+
+# summarize samples across cases
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+# simulate observations
+# again no new data, so uses original data
+divorce.sim <- sim(m5.3, n = 1e4)
+divorce.PI <- apply(divorce.sim, 2, PI)
+
+post_pred <- tibble(
+  state = d$Location,
+  divorce = d$Divorce,
+  mu.mean,
+  mu.low = mu.PI[1, ],
+  mu.hi = mu.PI[2, ],
+  divorce.low = divorce.PI[1, ],
+  divorce.hi = divorce.PI[2, ],
+  resid = divorce - mu.mean,
+  resid.low = divorce - divorce.low,
+  resid.hi = divorce - divorce.hi
+)
+
+ggplot(post_pred, aes(divorce, mu.mean, ymin = mu.low, ymax = mu.hi)) +
+  geom_pointrange(shape = 21, color = "blue") +
+  geom_abline(slope = 1, intercept = 0, linetype = 2) +
+  labs(x = "Observed divorce", 
+       y = "Predicted divorce") +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+Now plot error for each state
+
+```{r 5.14}
+post_pred %>% 
+  mutate(state = fct_reorder(factor(state), resid)) %>% 
+  ggplot(aes(state, resid, ymin = resid.low, ymax = resid.hi)) +
+  geom_hline(yintercept = 0, linetype = 2, alpha = 0.5) +
+  geom_pointrange(shape = 21) +
+  coord_flip() +
+  labs(x = "", y = "Divorce residual") +
+  theme_classic()
+```
+
+Spurious data example. Note the 89% PI for $b_{real}$ overlaps 1 and for $B_{spur}$ overlaps 0.
+
+```{r 5.15}
+N <- 1e2
+x_real <- rnorm(N)
+x_spur <- rnorm(N, x_real)
+y <- rnorm(N, x_real)
+d <- tibble(x_real, x_spur, y)
+pairs(d)
+
+m.spur <- rethinking::map(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + bR * x_real + bS * x_spur,
+    a ~ dnorm(10, 10),
+    bR ~ dnorm(0, 1),
+    bS ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+precis(m.spur)
+```
+
+## Masked relationship
+
+```{r 5.16}
+data(milk)
+d <- milk %>% 
+  drop_na(neocortex.perc)
+str(d)
+
+m5.5 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + bn * neocortex.perc,
+    a ~ dnorm(0, 100),
+    bn ~ dnorm(0, 1),
+    sigma ~ dunif(0, 1)
+  ),
+  data = d
+)
+
+precis(m5.5, digits = 3)
+
+np.seq <- 0:100
+
+mu <- link(m5.5, data = tibble(neocortex.perc = np.seq), n = 1e4)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+pred.data <- tibble(
+  neocortex.perc = np.seq,
+  kcal.per.g = mu.mean,
+  kcal.per.g.low = mu.PI[1, ],
+  kcal.per.g.hi = mu.PI[2, ]
+)
+
+ggplot(d, aes(neocortex.perc, kcal.per.g)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(data = pred.data) +
+  geom_ribbon(aes(ymin = kcal.per.g.low, ymax = kcal.per.g.hi),
+              pred.data,
+              alpha = 0.3)
+```
+
+```{r 5.24}
+d2 <- mutate(d, log.mass = log(mass))
+
+m5.6 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + bm * log.mass,
+    a ~ dnorm(0, 100),
+    bm ~ dnorm(0, 1),
+    sigma ~ dunif(0, 1)
+  ),
+  data = d2
+)
+precis(m5.6)
+```
+
+So we see two variables with weakly contrasting effects: kcal per g barely increases with neocortex percentage and barely decreases with log mass. So the two variables are masking each other's influence and bivariate regression is misleading. A multivariate regression revelas how strong the effect actually is.
+
+```{r 5.26}
+m5.7 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + bn * neocortex.perc + bm * log.mass,
+    a ~ dnorm(0, 100),
+    bn ~ dnorm(0, 1),
+    bm ~ dnorm(0, 1),
+    sigma ~ dunif(0, 1)
+  ),
+  data = d2
+)
+
+precis(m5.7)
+
+# Vary neocortex percent but keep log.mass fixed
+mean.log.mass <- mean(log(d2$mass))
+np.seq <- 0:100
+pred.data1 <- data.frame(
+  neocortex.perc = np.seq,
+  log.mass = mean.log.mass
+)
+
+mu <- link(m5.7, data = pred.data1, n = 1e4)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+pred.data1$kcal.per.g <- mu.mean
+pred.data1$kcal.per.g.low <- mu.PI[1, ]
+pred.data1$kcal.per.g.hi <- mu.PI[2, ]
+
+# And vice versa
+mean.np <- mean(d2$neocortex.perc)
+log.mass.seq <- seq(-2.5, 4.5, length.out = 100)
+pred.data2 <- data.frame(
+  neocortex.perc = mean.np,
+  log.mass = log.mass.seq
+)
+
+mu <- link(m5.7, data = pred.data2, n = 1e4)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI)
+
+pred.data2$kcal.per.g <- mu.mean
+pred.data2$kcal.per.g.low <- mu.PI[1, ]
+pred.data2$kcal.per.g.hi <- mu.PI[2, ]
+
+
+plot_grid(
+  ggplot(d2, aes(neocortex.perc, kcal.per.g), d2) +
+    geom_point(shape = 21, color = "blue") +
+    geom_line(data = pred.data1) +
+    geom_ribbon(aes(ymin = kcal.per.g.low, ymax = kcal.per.g.hi),
+                pred.data1,
+                alpha = 0.2) +
+    theme_classic() +
+    theme(aspect.ratio = 1),
+  ggplot(d2, aes(log.mass, kcal.per.g), d2) +
+    geom_point(shape = 21, color = "blue") +
+    geom_line(data = pred.data2) +
+    geom_ribbon(aes(ymin = kcal.per.g.low, ymax = kcal.per.g.hi),
+                pred.data2,
+                alpha = 0.2) +
+    theme_classic() +
+    theme(aspect.ratio = 1),
+  nrow = 1
+)
+```
+
+## When adding variables hurts
+
+### Multicollinear legs
+
+```{r 5.29}
+N <- 100
+
+d <- tibble(
+  height = rnorm(N, 10, 2),
+  leg_prop = runif(N, 0.4, 0.5),
+  leg_left = leg_prop * height + rnorm(N, 0, 0.02),
+  leg_right = leg_prop * height + rnorm(N, 0, 0.02)
+)
+
+m5.8 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + bl * leg_left + br * leg_right,
+    a ~ dnorm(10, 100),
+    bl ~ dnorm(2, 10),
+    br ~ dnorm(2, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5.8)
+
+plot(precis(m5.8))
+
+post <- extract.samples(m5.8)
+plot(bl ~ br, post, col = col.alpha(rangi2, 0.1), pch = 16)
+
+sum_blbr <- post$bl + post$br
+dens(sum_blbr, col = rangi2, lwd = 2, xlab = "sum of bl and br")
+
+m5.9 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + bl * leg_left,
+    a ~ dnorm(10, 100),
+    bl ~ dnorm(2, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5.9)
+```
+
+### Multicollinear milk
+
+```{r 5.35}
+d <- milk
+#kcal.per.g regressed on perc.fat
+m5.10 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + bf * perc.fat,
+    a ~ dnorm(0.6, 10),
+    bf ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+# kcal.per.g regressed on perc.lactose
+m5.11 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + bl * perc.lactose,
+    a ~ dnorm(0.6, 10),
+    bl ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5.10, digits = 3)
+precis(m5.11, digits = 3)
+```
+
+Kcal per gram of milk has a postive slope w.r.t. percent fat and negative w.r.t. percent lactose. However in a multivariate regression they cancel out because fat and lactose correlate so strongly.
+
+```{r 5.37}
+m5.12 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + bf * perc.fat + bl * perc.lactose,
+    a ~ dnorm(0.6, 10),
+    bf ~ dnorm(0, 1),
+    bl ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+precis(m5.12, digits = 3)
+
+pairs(~ kcal.per.g + perc.fat + perc.lactose, data = d, col = rangi2)
+
+cor(d$perc.fat, d$perc.lactose)
+```
+
+### Post-treatment bias
+
+```{r 5.41}
+# number of plants
+N <- 100
+
+# simulate initial heights
+h0 <- rnorm(N, 10, 2)
+
+# assign treatments and simulate fungus and growth
+treatment <- rep(0:1, each = N / 2)
+fungus <- rbinom(N, size = 1, prob = 0.5 - treatment * 0.4)
+h1 <- h0 + rnorm(N, 5 - 3 * fungus)
+
+d <- data.frame(h0, h1, treatment, fungus)
+```
+
+Including both treatment and presence of fungus, the coefficient for treatment is essentially 0 because it acts through controlling fungus. This model asks the wrong question. 
+
+```{R 5.42}
+m5.13 <- rethinking::map(
+  alist(
+    h1 ~ dnorm(mu, sigma),
+    mu <- a + bh * h0 + bt * treatment + bf * fungus,
+    a ~ dnorm(0, 100),
+    c(bh, bt, bf) ~ dnorm(0, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5.13)
+plot(precis(m5.13))
+```
+
+Leaving out presence of fungus reveals the treatment had a strong effect.
+
+```{R 5.43}
+m5.14 <- rethinking::map(
+  alist(
+    h1 ~ dnorm(mu, sigma),
+    mu <- a + bh * h0 + bt * treatment,
+    a ~ dnorm(0, 100),
+    c(bh, bt) ~ dnorm(0, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5.14)
+plot(precis(m5.14))
+```
+
+## Categorical variables
+
+
+
+
+
+
