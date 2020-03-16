@@ -551,6 +551,480 @@ plot(precis(m5.14))
 
 ## Categorical variables
 
+### Binary categories
+
+```{r 5.44}
+data("Howell1")
+d <- Howell1
+str(d)
+# note the categorical variable "male"
+
+m5.15 <- rethinking::map(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + bm * male,
+    a ~ dnorm(178, 100),
+    bm ~ dnorm(0, 10),
+    sigma ~ dunif(0, 50)
+  ),
+  data = d
+)
+
+precis(m5.15)
+```
+
+Interpret the model as follows: \alpha is the mean height *among females*. The model is specified as $\mu_i = \alpha + \beta_m \times m_i$, so $\mu$ equals $\alpha$ when $m_i$ is 0 (i.e. female). The posterior male height is $\beta_m$ more: 135 + 7.3 = 142.3. The *width* of the posterior male height though is more complicated because $\alpha$ and $\beta_m$ are correlated. So sample the posterior distribution.
+
+```{r 5.46}
+post <- extract.samples(m5.15)
+mu.male <- post$a + post$bm
+PI(mu.male)
+```
+
+### Many categories
+
+```{r 5.48}
+data(milk)
+d <- milk
+unique(d$clade)
+```
+
+For multiple categoreis, create multiple dummy variables. One category will end up being the "intercept" category, in this case `Ape`.
+
+```{r 5.49}
+d$clade.NWM <- ifelse(d$clade == "New World Monkey", 1, 0)
+d$clade.OWM <- ifelse(d$clade == "Old World Monkey", 1, 0)
+d$clade.S <- ifelse(d$clade == "Strepsirrhine", 1, 0)
+
+m5.16 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a + b.NWM * clade.NWM + b.OWM * clade.OWM + b.S * clade.S,
+    a ~ dnorm(0.6, 10),
+    c(b.NWM, b.OWM, b.S) ~ dnorm(0, 1),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+precis(m5.16)
+
+post <- extract.samples(m5.16) %>% 
+  mutate(
+    mu.ape = a, 
+    mu.NWM = a + b.NWM,
+    mu.OWM = a + b.OWM,
+    mu.S = a + b.S
+  )
+precis(select(post, mu.ape:mu.S))
+plot(precis(select(post, mu.ape:mu.S)))
+```
+
+Using the samples, we can ask questions like *what's the difference in means between the two monkey groups?*
+
+```{r 5.53}
+diff.NWM.OWM <- post$mu.NWM - post$mu.OWM
+quantile(diff.NWM.OWM, probs = c(0.025, 0.975))
+```
+
+### Another approach: Unique intercepts
+
+```{r 5.54}
+d$clade_id <- factor(d$clade)
+m5.16_alt <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, sigma),
+    mu <- a[clade_id],
+    a[clade_id] ~ dnorm(0.6, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5.16_alt, depth = 2)
+plot(precis(m5.16_alt, depth = 2))
+```
+
+## Exercises
+
+### Easy
+
+5E1 2 and 4 are multiple linear regressions
+
+5E2 $diversity_{animal} \sim 1 + latitude + diversity_{plant}$
+
+5E3 $time_{phd} \sim funding + size_{lab}$. Both $\beta_f$ and $\beta_s$ should be positive.
+
+S34 The inferentially equivalent models are 2, 3, 4, and 5.
+
+### Medium
+
+5M1 
+
+```{r 5m1}
+N <- 100
+d <- tibble(
+  x1 = rnorm(N, 5, 1),
+  x2 = x1 + rnorm(N, 0, 0.5),
+  alpha = dnorm(N, 2, 1),
+  mu = rnorm(N, 2, 0.25),
+  y = alpha + mu * x1
+)
+
+plot_grid(
+  ggplot(d, aes(x1, y)) +
+    geom_point() + 
+    labs(caption = sprintf("Cor = %0.2f", cor(d$x1, d$y))) +
+    theme_classic(),
+  ggplot(d, aes(x2, y)) +
+    geom_point() + 
+    labs(caption = sprintf("Cor = %0.2f", cor(d$x1, d$y))) +
+    theme_classic()
+)
+
+m5m1_single <- rethinking::map(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b1 * x1,
+    c(a, b1) ~ dnorm(0, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5m1_single)
+
+m5m1 <- rethinking::map(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b1 * x1 + b2 * x2,
+    c(a, b1, b2) ~ dnorm(0, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5m1)
+plot(precis(m5m1))
+```
+
+5M2
+
+```{r 5m2}
+N <- 100
+d <- tibble(
+  x1 = rnorm(N, 5, 1),
+  x2 = x1 + rnorm(N, 0, 1),
+  alpha = runif(N, 2, 4),
+  mu1 = rnorm(N, 2, 0.25),
+  mu2 = rnorm(N, -2, 0.25),
+  y = alpha + mu1 * x1 + mu2 * x2
+)
+
+plot_grid(
+  ggplot(d, aes(x1, y)) +
+    geom_point() + 
+    labs(caption = sprintf("Cor = %0.2f", cor(d$x1, d$y))) +
+    theme_classic(),
+  ggplot(d, aes(x2, y)) +
+    geom_point() + 
+    labs(caption = sprintf("Cor = %0.2f", cor(d$x1, d$y))) +
+    theme_classic()
+)
+
+m5m2 <- rethinking::map(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b1 * x1 + b2 * x2,
+    c(a, b1, b2) ~ dnorm(0, 10),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5m2)
+plot(precis(m5m2))
+```
+
+5m3 ???
+
+5m4 Not going to look up LDS numbers
+
+5m5 
+
+Is obesity associated with the price of gas after accounting for frequency of eating out? 
+
+$obesity_i \sim \alpha + \beta_g \times gas + \beta_r \times restaurant$
+
+Is obesity associated with the price of gas after accounting for hours walking? 
+
+$obesity_i \sim \alpha + \beta_g \times gas + \beta_w \times walking$
+
+### Hard
+
+```{r 5h1}
+data(foxes)
+str(foxes)
+
+# weight ~ area
+m5h1a <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + b * area,
+    a ~ dnorm(0, 10),
+    b ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = foxes
+)
+
+area.seq <- seq(min(foxes$area), max(foxes$area), length.out = 1e3)
+area.link <- link(m5h1a, tibble(area = area.seq), n = 1e3)
+area.mu <- apply(area.link, 2, mean)
+area.pi <- apply(area.link, 2, PI, 0.95)
+pred.data <- tibble(
+  area = area.seq,
+  weight = area.mu,
+  weight.low = area.pi[1, ],
+  weight.hi = area.pi[2, ]
+)
+
+ggplot(foxes, aes(area, weight)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(data = pred.data) +
+  geom_ribbon(aes(ymin = weight.low, ymax = weight.hi),
+              data = pred.data,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+plot(precis(m5h1a))
+
+# weight ~ groupsize
+m5h1b <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + b * groupsize,
+    a ~ dnorm(0, 10),
+    b ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = foxes
+)
+
+groupsize.seq <- seq(min(foxes$groupsize), 
+                     max(foxes$groupsize), 
+                     length.out = 1e3)
+groupsize.link <- link(m5h1b, tibble(groupsize = groupsize.seq), n = 1e3)
+groupsize.mu <- apply(groupsize.link, 2, mean)
+groupsize.pi <- apply(groupsize.link, 2, PI, 0.95)
+pred.data <- tibble(
+  groupsize = groupsize.seq,
+  weight = groupsize.mu,
+  weight.low = groupsize.pi[1, ],
+  weight.hi = groupsize.pi[2, ]
+)
+
+ggplot(foxes, aes(groupsize, weight)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(data = pred.data) +
+  geom_ribbon(aes(ymin = weight.low, ymax = weight.hi),
+              data = pred.data,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+plot(precis(m5h1b))
+```
+
+In the bivariate regressions, both slopes are very similar to 0.
+
+```{r 5h2}
+# weight ~ area + groupsize
+m5h2 <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + ba * area + bg * groupsize,
+    a ~ dnorm(0, 10),
+    c(ba, bg) ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = foxes
+)
+
+# Area w.r.t mean(groupsize)
+area.seq <- seq(min(foxes$area), max(foxes$area), length.out = 1e3)
+area.link <- link(
+  m5h2, 
+  tibble(area = area.seq, groupsize = mean(foxes$groupsize)), 
+  n = 1e3
+)
+area.mu <- apply(area.link, 2, mean)
+area.pi <- apply(area.link, 2, PI, 0.95)
+pred.area <- tibble(
+  area = area.seq,
+  weight = area.mu,
+  weight.low = area.pi[1, ],
+  weight.hi = area.pi[2, ]
+)
+
+ggplot(foxes, aes(area, weight)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(data = pred.area) +
+  geom_ribbon(aes(ymin = weight.low, ymax = weight.hi),
+              data = pred.area,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+# Groupsize w.r.t mean(area)
+groupsize.seq <- seq(min(foxes$groupsize), 
+                     max(foxes$groupsize), 
+                     length.out = 1e3)
+groupsize.link <- link(
+  m5h2, 
+  tibble(groupsize = groupsize.seq, area = mean(foxes$area)), 
+  n = 1e3
+)
+groupsize.mu <- apply(groupsize.link, 2, mean)
+groupsize.pi <- apply(groupsize.link, 2, PI, 0.95)
+pred.groupsize <- tibble(
+  groupsize = groupsize.seq,
+  weight = groupsize.mu,
+  weight.low = groupsize.pi[1, ],
+  weight.hi = groupsize.pi[2, ]
+)
+
+ggplot(foxes, aes(groupsize, weight)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(data = pred.groupsize) +
+  geom_ribbon(aes(ymin = weight.low, ymax = weight.hi),
+              data = pred.groupsize,
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+plot(precis(m5h2))
+```
+
+Both coefficients now have greater magnitudes. Area and groupsize are positively correlated (cor = `r sprintf("%0.2f", cor(foxes$area, foxes$groupsize))`) but weight is correlated positively with area and negatively with groupsize when both are taken into account. This is an example of a masked relationship.
+
+```{r 5h3}
+# weight ~ avgfood + groupsize
+m5h3a <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bf * avgfood + bg * groupsize,
+    a ~ dnorm(0, 10),
+    c(bf, bg) ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = foxes
+)
+
+plot(precis(m5h3a))
+
+# weight ~ avgfood + groupsize + area
+m5h3b <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bf * avgfood + bg * groupsize + ba * area,
+    a ~ dnorm(0, 10),
+    c(bf, bg, ba) ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = foxes
+)
+
+plot(precis(m5h3b))
+```
+
+`area` and `avgfood` are highly correlated (0.88), so the amount of information about weight you get from knowing `area` is reduced if you already know `avgfood` and vice versa. Comparing the models $weight \sim area + groupsize$ and $weight \sim avgfood + groupsize$ removes the masking relationship and lets us assess the relative merit of `area` and `avgfood`. When controlling for `groupsize`, increasing `avgfood` by one standard deviation on average increases weight by a factor of `r coef(m5h3a)["bf"] / sd(foxes$avgfood)`, which is much greater than increasing `area` by a standard deviation (`r coef(m5h2)["ba"] / sd(foxes$area)`). However, the uncertainty in the relationship is also much greater. It may help to standardize the variables first before fitting the model. After doing so, we see `avgfood` has a steeper slope but less certainty. As a result, the width of the prediction interval (from `sim()`, not `link()`) is greater. On that basis, I would include `area`.
+
+```{r 5h3b}
+zscore <- function(x) (x - mean(x)) / sd(x)
+d <- foxes %>% 
+  mutate_at(vars(avgfood, area, groupsize), list(z = zscore))
+
+m5h2z <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + ba * area_z + bg * groupsize_z,
+    a ~ dnorm(0, 10),
+    c(ba, bg) ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+m5h3az <- rethinking::map(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- a + bf * avgfood_z + bg * groupsize_z,
+    a ~ dnorm(0, 10),
+    c(bf, bg) ~ dnorm(0, 2),
+    sigma ~ dunif(0, 10)
+  ),
+  data = d
+)
+
+precis(m5h2z)
+precis(m5h3az)
+
+N <- 1000
+# area_z
+x <- seq(min(d$area_z), max(d$area_z), length.out = N)
+linkx <- link(m5h2z, tibble(area_z = x, groupsize_z = 0))
+simx <- sim(m5h2z, tibble(area_z = x, groupsize_z = 0))
+pred.data1 <- tibble(
+  x,
+  mu = apply(linkx, 2, mean),
+  mu.low = apply(linkx, 2, PI)[1, ],
+  mu.hi = apply(linkx, 2, PI)[2, ],
+  y.low = apply(simx, 2, PI)[1, ],
+  y.hi = apply(simx, 2, PI)[2, ],
+)
+
+ggplot(d, aes(area_z, weight)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(aes(x, mu), pred.data, inherit.aes = FALSE) +
+  geom_ribbon(aes(x, ymin = mu.low, ymax = mu.hi), 
+              pred.data1, 
+              inherit.aes = FALSE, 
+              alpha = 0.3) +
+  geom_ribbon(aes(x, ymin = y.low, ymax = y.hi), 
+              pred.data1, 
+              inherit.aes = FALSE, 
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+# avgfood_z
+x <- seq(min(d$avgfood_z), max(d$avgfood_z), length.out = N)
+linkx <- link(m5h3az, tibble(avgfood_z = x, groupsize_z = 0))
+simx <- sim(m5h3az, tibble(avgfood_z = x, groupsize_z = 0))
+pred.data2 <- tibble(
+  x,
+  mu = apply(linkx, 2, mean),
+  mu.low = apply(linkx, 2, PI)[1, ],
+  mu.hi = apply(linkx, 2, PI)[2, ],
+  y.low = apply(simx, 2, PI)[1, ],
+  y.hi = apply(simx, 2, PI)[2, ],
+)
+
+ggplot(d, aes(avgfood_z, weight)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_line(aes(x, mu), pred.data, inherit.aes = FALSE) +
+  geom_ribbon(aes(x, ymin = mu.low, ymax = mu.hi), 
+              pred.data2, 
+              inherit.aes = FALSE, 
+              alpha = 0.3) +
+  geom_ribbon(aes(x, ymin = y.low, ymax = y.hi), 
+              pred.data2, 
+              inherit.aes = FALSE, 
+              alpha = 0.3) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
 
 
 
