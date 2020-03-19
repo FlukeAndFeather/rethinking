@@ -986,7 +986,7 @@ pred.data1 <- tibble(
 
 ggplot(d, aes(area_z, weight)) +
   geom_point(shape = 21, color = "blue") +
-  geom_line(aes(x, mu), pred.data, inherit.aes = FALSE) +
+  geom_line(aes(x, mu), pred.data1, inherit.aes = FALSE) +
   geom_ribbon(aes(x, ymin = mu.low, ymax = mu.hi), 
               pred.data1, 
               inherit.aes = FALSE, 
@@ -1013,7 +1013,7 @@ pred.data2 <- tibble(
 
 ggplot(d, aes(avgfood_z, weight)) +
   geom_point(shape = 21, color = "blue") +
-  geom_line(aes(x, mu), pred.data, inherit.aes = FALSE) +
+  geom_line(aes(x, mu), pred.data2, inherit.aes = FALSE) +
   geom_ribbon(aes(x, ymin = mu.low, ymax = mu.hi), 
               pred.data2, 
               inherit.aes = FALSE, 
@@ -1025,8 +1025,3 @@ ggplot(d, aes(avgfood_z, weight)) +
   theme_classic() +
   theme(aspect.ratio = 1)
 ```
-
-
-
-
-
