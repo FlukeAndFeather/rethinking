@@ -1,0 +1,397 @@
+---
+title: 'Ch 6: Overfitting, Regularization, and Information Criteria'
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+* **Overfitting** and **underfitting**
+* **Regularizing prior** and **information criteria**
+
+## The problem with parameters
+
+Consider the shape of the rlationship between body mass and brain volume.
+
+```{r 6.1}
+library(ggrepel)
+library(tidyverse)
+d <- tibble(
+  species = c("afarensis", "africanus", "habilis", "boisei", "rudolfensis", 
+                "ergaster", "sapiens"),
+  brain = c(438, 452, 612, 521, 752, 871, 1350),
+  mass = c(37.0, 35.5, 34.5, 41.5, 55.5, 61.0, 53.5)
+)
+
+ggplot(d, aes(mass, brain)) +
+  geom_point(shape = 21, color = "blue") +
+  geom_text_repel(aes(label = species)) +
+  scale_x_continuous("body mass (kg)", breaks = 10 * (3:7)) +
+  scale_y_continuous("brain volume (cc)", breaks = 200 * (3:6)) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+What shape should we choose? First, try a linear one:
+
+$$
+v_i \sim \mathcal{N}(\mu_i, \sigma) \\
+\mu_i = \alpha + \beta_1 m_i
+$$
+
+```{r 6.2}
+m6.1 <- lm(brain ~ mass, data = d)
+1 - var(resid(m6.1)) / var(d$brain)
+summary(m6.1)
+```
+
+With more complicated polynomials, "model fit" (i.e. $R^2$) increases but model loses meaning.
+
+```{r 6.4}
+library(cowplot)
+m6.2 <- lm(brain ~ mass + I(mass^2), data = d)
+m6.3 <- lm(brain ~ mass + I(mass^2) + I(mass^3), data = d)
+m6.4 <- lm(brain ~ mass + I(mass^2) + I(mass^3) + I(mass^4), data = d)
+m6.5 <- lm(brain ~ mass + I(mass^2) + I(mass^3) + I(mass^4) + I(mass^5), 
+           data = d)
+m6.6 <- lm(brain ~ mass + I(mass^2) + I(mass^3) + I(mass^4) + I(mass^5) +
+             I(mass^6),
+           data = d)
+
+plot_model <- function(m) {
+  r2 <- 1 - var(resid(m)) / var(d$brain)
+  ggplot(m$model, aes(mass, brain)) +
+    geom_point(shape = 21, color = "blue") +
+    stat_function(fun = ~ predict(m, newdata = data.frame(mass = .x))) +
+    labs(title = sprintf("R^2 = %0.2f", r2)) +
+    theme_classic() +
+    theme(aspect.ratio = 1,
+          plot.title = element_text(hjust = 0.5))
+}
+list(m6.1, m6.2, m6.3, m6.4, m6.5, m6.6) %>% 
+  purrr::map(plot_model) %>% 
+  plot_grid(plotlist = ., ncol = 2)
+```
+
+Conversely, too *few* parameters leads to poor predictions as well.
+
+$$
+v_i \sim \mathcal{N}(\mu, \sigma) \\
+\mu = \alpha
+$$
+
+```{r 6.6}
+m6.7 <- lm(brain ~ 1, data = d)
+pred_int <- predict(m6.7, 
+                    newdata = data.frame(mass = 50), 
+                    interval = "predict")[1, 2:3]
+plot(brain ~ mass, d, pch = 21, col = "blue")
+abline(m6.7) 
+```
+
+There is a trade-off between sensitivity and complexity. Complex models change dramatically when removing data points, simple models less so.
+
+```{r 6.7}
+library(rethinking)
+plot(brain ~ mass, d, col = "slateblue")
+for (i in 1:nrow(d)) {
+  d.new <- d[-i, ]
+  m0 <- lm(brain ~ mass, d.new)
+  abline(m0, col = col.alpha("black", 0.5))
+}
+
+plot(brain ~ mass, d, col = "slateblue", ylim = c(-500, 2500))
+for (i in 1:nrow(d)) {
+  d.new <- d[-i, ]
+  m0 <- lm(brain ~ mass + I(mass^2) + I(mass^3) + I(mass^4) + I(mass^5) +
+             I(mass^6),
+           data = d.new)
+  f <- function(x) suppressWarnings(predict(m0, newdata = data.frame(mass = x)))
+  curve(f, add = TRUE)
+}
+```
+
+## Information theory and model performance
+
+**Information entropy** is the uncertainty contained in a probability distribution.
+
+$$
+H(p) = -E~log(p_i) = -\sum_{i=1}^n p_i ~ log(p_i)
+$$
+
+**Divergence** is the additional uncertainty induced by using probabilities from one distribution to describe another distribution.
+
+$$ 
+D_{KL}(p,q) = \sum_i p_i(log(p_i) - log(q_i)) = \sum_i p_i ~ log \left( \frac{p_i}{q_i} \right)
+$$
+
+```{r fig6.6}
+library(tidyverse)
+p <- 0.3 #, 0.7
+q <- seq(0.01, 0.99, length.out = 1000)
+divergence <- function(p, q) {
+  sum(p * log(p / q))
+}
+tibble(
+  p, 
+  q, 
+  d = map2_dbl(p, q, ~ divergence(c(.x, 1 - .x), c(.y, 1 - .y)))
+) %>% 
+  ggplot(aes(q, d)) +
+  geom_line(color = "slateblue", size = 1) +
+  geom_vline(xintercept = p, linetype = "dashed") +
+  annotate("text", p + 0.02, 1.5, label = "q = p", hjust = 0) +
+  scale_x_continuous("q[1]", breaks = seq(0, 1, by = 0.2)) +
+  scale_y_continuous("Divergence of q from p", 
+                     breaks = seq(0, 2.5, by = 0.5)) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+```
+
+**Deviance** is a measure a *relative* model fit and an approximation of K-L divergence (since we don't know the true $p$).
+
+$$ 
+D(q) = -2 \sum_i log(q_i)
+$$
+
+where $q_i$ is the likelihood of case $i$. This can be calculated for a linear model using `dnorm()`.
+
+```{r 6.10}
+# fit model with lm
+m6.1 <- lm(brain ~ mass, d)
+
+# compute deviance
+-2 * logLik(m6.1)
+```
+
+How to compute $D$:
+
+```{r 6.11}
+# standardize the mass before fitting
+d$mass.s <- (d$mass - mean(d$mass)) / sd(d$mass)
+m6.8 <- rethinking::map(
+  alist(
+    brain ~ dnorm(mu, sigma),
+    mu <- a + b * mass.s
+  ),
+  data = d,
+  start = list(a = mean(d$brain), b = 0, sigma = sd(d$brain)),
+  method = "Nelder-Mead"
+)
+
+# extract MAP estimates
+theta <- coef(m6.8)
+
+# compute deviance
+dev <- -2 * sum(dnorm(d$brain,
+                      mean = theta[1] + theta[2] * d$mass.s,
+                      sd = theta[3],
+                      log = TRUE))
+dev
+```
+
+In the code above, the likelihood of each point given the model is given by `dnorm()`. The mean is a linear function of the predictor `d$mass.s` by definition and the standard deviation is constant. `log = TRUE` returns the log likelihood, which we sum and multiply by -2.
+
+### From deviance to out-of-sample
+
+Training and test samples, essentially k-fold validation.
+
+```{r 6.12}
+N <- 20
+kseq <- 1:5
+dev <- sapply(kseq, function(k) {
+  print(k)
+  r <- mcreplicate(1e4, sim.train.test(N = N, k = k), mc.cores = 4)
+  c(mean(r[1, ]), mean(r[2, ]), sd(r[1, ]), sd(r[2, ]))
+})
+
+plot(kseq, dev[1, ], 
+     ylim = c(min(dev[1:2, ]) - 5, max(dev[1:2, ]) + 10),
+     xlim = c(1, 5.1), 
+     xlab = "Number of parameters",
+     ylab = "deviance",
+     pch = 16,
+     col = rangi2)
+mtext(concat("N = ", N))
+points(kseq + 0.1, dev[2, ])
+for (i in kseq) {
+  pts_in <- dev[1, i] + c(-1, +1) * dev[3, i]
+  pts_out <- dev[2, i] + c(-1, +1) * dev[4, i]
+  lines(c(i, i), pts_in, col = rangi2)
+  lines(c(i, i) + 0.1, pts_out)
+}
+```
+
+## Information criteria
+
+### Akaike IC
+
+See Fig. 6.10.
+
+$$
+AIC = D_{train} + 2p
+$$
+
+Assumes flat prior, Gaussian posterior, $N$ >> $k$
+
+### Deviance IC
+
+$$
+DIC = \bar{D} + (\bar{D} - \hat{D}) = \bar{D} + p_D
+$$
+
+Where $D$ is the posterior distribution of deviance, $\bar{D}$ is the average of $D$, and $\hat{D}$ is the deviance calculated at the posterior mean. With flat priors, $DIC$ reduces to $AIC$. But regularizing priors constrain model flexibility to $p_D$ can be less than 2 times the number of parameters.
+
+### Widely Applicable IC
+
+A *pointwise* IC. There are two parts. Let $Pr(y_i)$ be the average likelihood of observation $i$ in the training sample. Then the first part, the log-pointwise-predictive-density (lppd), is:
+
+$$
+lppd = \sum_{i=1}^N log ~ Pr(y_i)
+$$
+
+This is the pointwise analog of deviance, averaged over the posterior distribution. The next part is the effective number of parameters $p_{WAIC}$. Let $V(y_i)$ be the variance in log-likelihood of observation $i$ in the training sample.
+
+$$
+p_{WAIC} = \sum_{i=1}^N V(y_i)
+$$
+
+Then WAIC is defined as:
+
+$$
+WAIC = -2(lppd - p_{WAIC})
+$$
+
+## Using information criteria
+
+Both **model comparison** and **model averaging**.
+
+### Model comparison
+
+```{r 6.21}
+# load data
+data("milk")
+d <- drop_na(milk) %>% 
+  mutate(neocortex = neocortex.perc / 100)
+
+# fit four models
+a.start <- mean(d$kcal.per.g)
+sigma.start <- log(sd(d$kcal.per.g))
+m6.11 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(a, exp(log.sigma))
+  ),
+  data = d,
+  start = list(a = a.start, log.sigma = sigma.start)
+)
+m6.12 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, exp(log.sigma)),
+    mu <- a + bn * neocortex
+  ),
+  data = d,
+  start = list(a = a.start, bn = 0, log.sigma = sigma.start)
+)
+m6.13 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, exp(log.sigma)),
+    mu <- a + bm * log(mass)
+  ),
+  data = d,
+  start = list(a = a.start, bm = 0, log.sigma = sigma.start)
+)
+m6.14 <- rethinking::map(
+  alist(
+    kcal.per.g ~ dnorm(mu, exp(log.sigma)),
+    mu <- a + bn * neocortex + bm * log(mass)
+  ),
+  data = d,
+  start = list(a = a.start, bn = 0, bm = 0, log.sigma = sigma.start)
+)
+```
+
+```{r 6.23}
+# Using rethinking
+( milk.models <- compare(m6.11, m6.12, m6.13, m6.14) ) 
+
+# Using tidyverse
+mod.list <- list(m6.11 = m6.11, m6.12 = m6.12, m6.13 = m6.13, m6.14 = m6.14)
+akaike_weight <- function(aic) {
+  daic <- aic - min(aic)
+  exp(-1/2 * daic) / sum(exp(-1/2 * daic))
+}
+map_dfr(mod.list, WAIC, .id = "model") %>% 
+  rename(pWAIC = penalty, SE = std_err) %>% 
+  arrange(WAIC) %>% 
+  transmute(model, WAIC, pWAIC, 
+            dWAIC = WAIC - min(WAIC), 
+            weight = akaike_weight(WAIC),
+            SE)
+
+plot(milk.models, SE = TRUE, dSE = TRUE)
+```
+
+Comparing posterior densities of parameters for the four models fit to the primate milk data
+
+```{r 6.27}
+coeftab(m6.11, m6.12, m6.13, m6.14)
+plot(coeftab(m6.11, m6.12, m6.13, m6.14))
+```
+
+### Model averaging
+
+Plot the best performing model
+
+```{r 6.29}
+# neocortex from 0.5 to 0.8
+nc.seq <- seq(from = 0.5, to = 0.8, length.out = 30)
+d.predict <- list(
+  kcal.per.g = rep(0, 30), # empty outcome
+  neocortex = nc.seq,      # sequence of neocortex
+  mass = rep(4.5, 30)      # average mass
+)
+
+pred.m6.14 <- link(m6.14, data = d.predict)
+mu <- apply(pred.m6.14, 2, mean)
+mu.PI <- apply(pred.m6.14, 2, PI)
+
+# Plot using base R
+plot(kcal.per.g ~ neocortex, d, col = rangi2)
+lines(nc.seq, mu, lty = 2)
+lines(nc.seq, mu.PI[1, ], lty = 2)
+lines(nc.seq, mu.PI[2, ], lty = 2)
+
+# plot using ggplot
+pred.data <- tibble(neocortex = nc.seq, mu, mu_lwr = mu.PI[1, ], 
+                    mu_upr = mu.PI[2, ])
+ggplot(d, aes(neocortex, kcal.per.g)) +
+  geom_point(shape = 21, col = rangi2) +
+  geom_line(aes(y = mu), pred.data, linetype = 2) +
+  geom_line(aes(y = mu_lwr), pred.data, linetype = 2) +
+  geom_line(aes(y = mu_upr), pred.data, linetype = 2) +
+  scale_x_continuous(breaks = seq(0.55, 0.75, by = 0.05)) +
+  scale_y_continuous(breaks = seq(0.5, 0.9, by = 0.1)) +
+  coord_cartesian(xlim = c(0.54, 0.77), ylim = c(0.45, 0.95)) +
+  theme_classic(base_size = 12) +
+  theme(axis.line = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 0.75))
+```
+
+Now overlay the averaged models
+
+```{r 6.30}
+plot(kcal.per.g ~ neocortex, d, col = rangi2)
+lines(nc.seq, mu, lty = 2)
+lines(nc.seq, mu.PI[1, ], lty = 2)
+lines(nc.seq, mu.PI[2, ], lty = 2)
+
+milk.ensemble <- ensemble(m6.11, m6.12, m6.13, m6.14, data = d.predict)
+mu <- apply(milk.ensemble$link, 2, mean)
+mu.PI <- apply(milk.ensemble$link, 2, PI)
+lines(nc.seq, mu)
+shade(mu.PI, nc.seq)
+```
+
+The ensemble mean (solid line) has barely moved from the best fitting model mean (dashed line) because the best fitting model
